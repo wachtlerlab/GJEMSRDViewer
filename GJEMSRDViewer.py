@@ -169,35 +169,34 @@ class CentralWidget(QtGui.QWidget):
 
     def refresh(self):
 
-        startText = self.startW.dirPathW.text()
-        endText = self.endW.dirPathW.text()
+        if not hasattr(self, 'rdi'):
+            self.startW.raiseInfo('Please load the data first')
 
-        if not startText:
-            self.startW.raiseInfo('Please enter a valid starting time.')
-        elif not endText:
-            self.endW.raiseInfo('Please enter a valid ending time')
         else:
-            startTime = float(startText) * qu.s
-            endTime = float(endText) * qu.s
-            if startTime < self.rdi.vibrationSignal.t_start:
-                self.startW.raiseInfo('Signal Starts at ' + str(self.rdi.vibrationSignal.t_start)
-                                      +'. Please enter valid start value.' )
-            elif endTime > self.rdi.vibrationSignal.t_stop:
-                self.startW.raiseInfo('Signal End at ' + str(self.rdi.vibrationSignal.t_stop)
-                                      +'. Please enter valid end value.')
-            elif endTime == startTime:
-                self.startW.raiseInfo('Error: Start and End times are same')
+
+            startText = self.startW.dirPathW.text()
+            endText = self.endW.dirPathW.text()
+
+            if not startText:
+                self.startW.raiseInfo('Please enter a valid starting time.')
+            elif not endText:
+                self.endW.raiseInfo('Please enter a valid ending time')
             else:
-                self.draw(startTime, endTime)
+                startTime = float(startText) * qu.s
+                endTime = float(endText) * qu.s
+                if startTime < self.rdi.vibrationSignal.t_start:
+                    self.startW.raiseInfo('Signal Starts at ' + str(self.rdi.vibrationSignal.t_start)
+                                          +'. Please enter valid start value.' )
+                elif endTime > self.rdi.vibrationSignal.t_stop:
+                    self.startW.raiseInfo('Signal End at ' + str(self.rdi.vibrationSignal.t_stop)
+                                          +'. Please enter valid end value.')
+                elif endTime == startTime:
+                    self.startW.raiseInfo('Error: Start and End times are same')
+                else:
+                    self.draw(startTime, endTime)
 
-                self.epochWidth = (endTime - startTime).magnitude
-                self.presentPlotStart = startTime
-
-
-
-
-
-
+                    self.epochWidth = (endTime - startTime).magnitude
+                    self.presentPlotStart = startTime
 
     def draw(self, start=None, end=None):
 
@@ -249,14 +248,14 @@ class MainWindow(QtGui.QMainWindow):
         self.centralW = CentralWidget(self)
         self.setCentralWidget(self.centralW)
 
-        loadData = QtGui.QAction(QtGui.QIcon(os.path.join(self.iconsFolder, 'dialog-apply.png')), 'Load Data', self)
+        loadData = QtGui.QAction(QtGui.QIcon(os.path.join(self.iconsFolder, 'document-save.png')), 'Load Data', self)
         loadData.setShortcut('F4')
         loadData.setStatusTip('Load data from the selected files')
         self.connect(loadData, QtCore.SIGNAL('triggered()'), self.centralW.load)
 
         toolbar.addAction(loadData)
 
-        refresh = QtGui.QAction(QtGui.QIcon(os.path.join(self.iconsFolder, 'dialog-save.png')), 'Refresh plot', self)
+        refresh = QtGui.QAction(QtGui.QIcon(os.path.join(self.iconsFolder, 'dialog-apply.png')), 'Refresh plot', self)
         refresh.setShortcut('F5')
         refresh.setStatusTip('Refresh plot according to start stop times entered')
         self.connect(refresh, QtCore.SIGNAL('triggered()'), self.centralW.refresh)
@@ -287,7 +286,7 @@ class MainWindow(QtGui.QMainWindow):
     def closeEvent(self, event):
 
         reply = QtGui.QMessageBox.question(self, 'Message',
-                                            "Are you sure to quit?", QtGui.QMessageBox.Yes |
+                                            "Really quit?", QtGui.QMessageBox.Yes |
                                             QtGui.QMessageBox.No, QtGui.QMessageBox.No)
 
         if reply == QtGui.QMessageBox.Yes:
