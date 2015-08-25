@@ -12,7 +12,6 @@ class TitledText(QtGui.QGroupBox):
 
         QtGui.QGroupBox.__init__(self, title, parent)
         self.dirPathW = QtGui.QLineEdit()
-        self.dirPathW.setReadOnly(True)
         self.dirPathW.setMaxLength(120)
         self.dirPathW.setMaximumHeight(30)
         self.dirPathW.setSizePolicy(QtGui.QSizePolicy.Preferred, QtGui.QSizePolicy.Fixed)
@@ -24,6 +23,10 @@ class TitledText(QtGui.QGroupBox):
 
     def setText(self, str):
         self.dirPathW.setText(str)
+
+    def raiseInfo(self, str):
+
+        QtGui.QMessageBox.information(self.dirPathW, 'Warning!', str)
 
 
 
@@ -103,6 +106,13 @@ class CentralWidget(QtGui.QWidget):
         fileSelectGrid.addWidget(self.metaDataSelect, 0, 0)
         fileSelectGrid.addWidget(self.smrFileSelect, 0, 1)
 
+        self.startW = TitledText('Start time in s')
+        self.endW = TitledText('End time in s')
+
+        startstopGrid = QtGui.QGridLayout()
+        startstopGrid.addWidget(self.startW, 0, 0)
+        startstopGrid.addWidget(self.endW, 0, 1)
+
         self.mplPlot = MatplotlibWidget(parent=self)
         prevButton = QtGui.QPushButton(QtGui.QIcon(os.path.join(iconsFolder, 'go-previous.png')), 'Previous', self)
         nextButton = QtGui.QPushButton(QtGui.QIcon(os.path.join(iconsFolder, 'go-next.png')), 'Next', self)
@@ -119,8 +129,9 @@ class CentralWidget(QtGui.QWidget):
         calibGrid = QtGui.QGridLayout()
 
         self.voltCalib = TitledText('Voltage Calibrations')
+        self.voltCalib.dirPathW.setReadOnly(True)
         self.vibCalib = TitledText('Vibration Calibrations')
-
+        self.vibCalib.dirPathW.setReadOnly(True)
 
         calibGrid.addWidget(self.voltCalib, 0, 0)
         calibGrid.addWidget(self.vibCalib, 0, 1)
@@ -129,54 +140,82 @@ class CentralWidget(QtGui.QWidget):
         vbox = QtGui.QVBoxLayout()
         vbox.stretch(1)
         vbox.addLayout(fileSelectGrid)
+        vbox.addLayout(startstopGrid)
         vbox.addLayout(plotGrid)
         vbox.addLayout(calibGrid)
 
         self.setLayout(vbox)
 
-    def showData(self):
-
-
+    def load(self):
 
         self.rdi = RawDataImporter(str(self.smrFileSelect.dirPathW.text()),
                                    str(self.metaDataSelect.dirPathW.text()),
                                    'Sheet1')
+        self.rdi.parseSpike2Data()
 
         vibCalib = self.rdi.dataBlock.segments[0].eventarrays[1].annotations['extra_labels']
         self.vibCalib.setText(str(vibCalib.tolist()))
         voltCalib = self.rdi.dataBlock.segments[0].eventarrays[0].annotations['extra_labels']
         self.voltCalib.setText(str(voltCalib.tolist()))
 
-
-        self.rdi.parseSpike2Data()
         tStart = self.rdi.vibrationSignal.t_start
         tStart.units = qu.s
-        tStop = self.rdi.vibrationSignal.t_stop
-        tStop.units = qu.s
-
-        self.epochStarts = np.linspace(tStart.magnitude, tStop.magnitude, 20) * qu.s
-        self.intInd = 0
-
-        self.draw()
 
 
-    def draw(self):
-        self.rdi.plotVibEpoch(self.mplPlot.axes, [self.epochStarts[self.intInd], self.epochStarts[self.intInd + 1]])
+        self.presentPlotStart = tStart
+        self.epochWidth = 20
+
+        self.draw(self.presentPlotStart, self.presentPlotStart + self.epochWidth * qu.s)
+
+    def refresh(self):
+
+        startText = self.startW.dirPathW.text()
+        endText = self.endW.dirPathW.text()
+
+        if not startText:
+            self.startW.raiseInfo('Please enter a valid starting time.')
+        elif not endText:
+            self.endW.raiseInfo('Please enter a valid ending time')
+        else:
+            startTime = float(startText) * qu.s
+            endTime = float(endText) * qu.s
+            if startTime < self.rdi.vibrationSignal.t_start:
+                self.startW.raiseInfo('Signal Starts at ' + str(self.rdi.vibrationSignal.t_start)
+                                      +'. Please enter valid start value.' )
+            elif endTime > self.rdi.vibrationSignal.t_stop:
+                self.startW.raiseInfo('Signal End at ' + str(self.rdi.vibrationSignal.t_stop)
+                                      +'. Please enter valid end value.')
+            elif endTime == startTime:
+                self.startW.raiseInfo('Error: Start and End times are same')
+            else:
+                self.draw(startTime, endTime)
+
+                self.epochWidth = (endTime - startTime).magnitude
+                self.presentPlotStart = startTime
+
+
+
+
+
+
+
+    def draw(self, start=None, end=None):
+
+        self.presentPlotStart = start
+        self.rdi.plotVibEpoch(self.mplPlot.axes, [start, end])
         self.mplPlot.draw()
 
     def plotNextInterval(self):
 
-        if self.intInd < len(self.epochStarts) - 1:
-            self.intInd += 1
+        if self.presentPlotStart + 2 * self.epochWidth * qu.s < self.rdi.vibrationSignal.t_stop:
 
-            self.draw()
+            self.draw(self.presentPlotStart + self.epochWidth * qu.s, self.presentPlotStart + 2 * self.epochWidth * qu.s)
 
     def plotPrevInterval(self):
 
-        if self.intInd > 0:
-            self.intInd -= 1
+        if self.presentPlotStart - self.epochWidth * qu.s > self.rdi.vibrationSignal.t_start:
 
-            self.draw()
+            self.draw(self.presentPlotStart - self.epochWidth * qu.s, self.presentPlotStart)
 
 
 
@@ -210,17 +249,25 @@ class MainWindow(QtGui.QMainWindow):
         self.centralW = CentralWidget(self)
         self.setCentralWidget(self.centralW)
 
-        showData = QtGui.QAction(QtGui.QIcon(os.path.join(self.iconsFolder, 'dialog-apply.png')), 'Show Data', self)
-        showData.setShortcut('F5')
-        showData.setStatusTip('Show data from the selected files')
-        self.connect(showData, QtCore.SIGNAL('triggered()'), self.centralW.showData)
+        loadData = QtGui.QAction(QtGui.QIcon(os.path.join(self.iconsFolder, 'dialog-apply.png')), 'Load Data', self)
+        loadData.setShortcut('F4')
+        loadData.setStatusTip('Load data from the selected files')
+        self.connect(loadData, QtCore.SIGNAL('triggered()'), self.centralW.load)
 
-        toolbar.addAction(showData)
+        toolbar.addAction(loadData)
+
+        refresh = QtGui.QAction(QtGui.QIcon(os.path.join(self.iconsFolder, 'dialog-save.png')), 'Refresh plot', self)
+        refresh.setShortcut('F5')
+        refresh.setStatusTip('Refresh plot according to start stop times entered')
+        self.connect(refresh, QtCore.SIGNAL('triggered()'), self.centralW.refresh)
+
+        toolbar.addAction(refresh)
 
 
         menubar = self.menuBar()
         file = menubar.addMenu('&File')
-        file.addAction(showData)
+        file.addAction(loadData)
+        file.addAction(refresh)
 
         file.addAction(exit)
 
