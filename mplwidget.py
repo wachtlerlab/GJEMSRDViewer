@@ -14,13 +14,17 @@ from matplotlib.figure import Figure
 class MatplotlibWidget(FigureCanvas):
     """Ultimately, this is a QWidget (as well as a FigureCanvasAgg, etc.)."""
 
-    def __init__(self, parent=None, name=None, width=5, height=4, dpi=100, bgcolor=None):
+    def __init__(self, parent=None, name=None, width=5, height=4, dpi=100, bgcolor=None, mplPars=None):
 
         self.parent = parent
+
         if self.parent:
             bgc = parent.palette().color(QtGui.QPalette.Background)
             bgcolor = float(bgc.red())/255.0, float(bgc.green())/255.0, float(bgc.blue())/255.0
             #bgcolor = "#%02X%02X%02X" % (bgc.red(), bgc.green(), bgc.blue())
+
+            if mplPars:
+                matplotlib.rcParams.update(mplPars)
 
             self.fig = Figure(figsize=(width, height), dpi=dpi, facecolor=bgcolor, edgecolor=bgcolor)
             self.axes = self.fig.add_subplot(111)

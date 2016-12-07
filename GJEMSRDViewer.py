@@ -2,9 +2,23 @@ import sys
 from PyQt4 import QtGui, QtCore
 import os
 from mplwidget import MatplotlibWidget
-from rawDataImport import RawDataImporter
+from rawDataImport import RawDataViewer, parseMetaDataFile, extractMetaData
 import quantities as qu
 import numpy as np
+
+mplPars = {'text.usetex': True,
+           'axes.labelsize': 'large',
+           'axes.titlesize': 42,
+           'font.family': 'sans-serif',
+           'font.sans-serif': 'computer modern roman',
+           'font.size': 42,
+           'font.weight': 'black',
+           'xtick.labelsize': 36,
+           'ytick.labelsize': 36,
+           'legend.fontsize': 20,
+           }
+
+
 
 class TitledText(QtGui.QGroupBox):
 
@@ -100,11 +114,10 @@ class CentralWidget(QtGui.QWidget):
         iconsFolder = parent.iconsFolder
 
         self.smrFileSelect = FileSelect('SMR File', 'SMR File( *.smr)')
-        self.metaDataSelect = FileSelect('Metadata File', 'MS Excel File( *.xls *.xlsx)')
 
         fileSelectGrid = QtGui.QGridLayout()
-        fileSelectGrid.addWidget(self.metaDataSelect, 0, 0)
-        fileSelectGrid.addWidget(self.smrFileSelect, 0, 1)
+
+        fileSelectGrid.addWidget(self.smrFileSelect, 0, 0)
 
         self.startW = TitledText('Start time in s')
         self.endW = TitledText('End time in s')
@@ -113,7 +126,7 @@ class CentralWidget(QtGui.QWidget):
         startstopGrid.addWidget(self.startW, 0, 0)
         startstopGrid.addWidget(self.endW, 0, 1)
 
-        self.mplPlot = MatplotlibWidget(parent=self)
+        self.mplPlot = MatplotlibWidget(parent=self, mplPars=mplPars)
         prevButton = QtGui.QPushButton(QtGui.QIcon(os.path.join(iconsFolder, 'go-previous.png')), 'Previous', self)
         nextButton = QtGui.QPushButton(QtGui.QIcon(os.path.join(iconsFolder, 'go-next.png')), 'Next', self)
         self.connect(nextButton, QtCore.SIGNAL('clicked()'), self.plotNextInterval)
@@ -125,47 +138,25 @@ class CentralWidget(QtGui.QWidget):
         plotGrid.addWidget(nextButton, 0, 2)
 
 
-
-        calibGrid = QtGui.QGridLayout()
-
-        self.voltCalib = TitledText('Voltage Calibrations')
-        self.voltCalib.dirPathW.setReadOnly(True)
-        self.vibCalib = TitledText('Vibration Calibrations')
-        self.vibCalib.dirPathW.setReadOnly(True)
-
-        calibGrid.addWidget(self.voltCalib, 0, 0)
-        calibGrid.addWidget(self.vibCalib, 0, 1)
-
-
         vbox = QtGui.QVBoxLayout()
         vbox.stretch(1)
         vbox.addLayout(fileSelectGrid)
         vbox.addLayout(startstopGrid)
         vbox.addLayout(plotGrid)
-        vbox.addLayout(calibGrid)
 
         self.setLayout(vbox)
 
     def load(self):
 
-        self.rdi = RawDataImporter(str(self.smrFileSelect.dirPathW.text()),
-                                   str(self.metaDataSelect.dirPathW.text()),
-                                   'Sheet1')
-        self.rdi.parseSpike2Data()
-
-        vibCalib = self.rdi.dataBlock.segments[0].eventarrays[1].annotations['extra_labels']
-        self.vibCalib.setText(str(vibCalib.tolist()))
-        voltCalib = self.rdi.dataBlock.segments[0].eventarrays[0].annotations['extra_labels']
-        self.voltCalib.setText(str(voltCalib.tolist()))
-
+        self.rdi = RawDataViewer(str(self.smrFileSelect.dirPathW.text()),
+                                   forceUnits=True)
         tStart = self.rdi.vibrationSignal.t_start
         tStart.units = qu.s
 
-
         self.presentPlotStart = tStart
-        self.epochWidth = 20
+        self.epochWidth = 20 * qu.s
 
-        self.draw(self.presentPlotStart, self.presentPlotStart + self.epochWidth * qu.s)
+        self.draw(self.presentPlotStart, self.presentPlotStart + self.epochWidth)
 
     def refresh(self):
 
@@ -195,26 +186,28 @@ class CentralWidget(QtGui.QWidget):
                 else:
                     self.draw(startTime, endTime)
 
-                    self.epochWidth = (endTime - startTime).magnitude
+                    self.epochWidth = endTime - startTime
                     self.presentPlotStart = startTime
 
     def draw(self, start=None, end=None):
 
-        self.presentPlotStart = start
+        if start:
+            self.presentPlotStart = start
+        self.mplPlot.axes.clear()
         self.rdi.plotVibEpoch(self.mplPlot.axes, [start, end])
         self.mplPlot.draw()
 
     def plotNextInterval(self):
 
-        if self.presentPlotStart + 2 * self.epochWidth * qu.s < self.rdi.vibrationSignal.t_stop:
+        if self.presentPlotStart + 2 * self.epochWidth < self.rdi.vibrationSignal.t_stop:
 
-            self.draw(self.presentPlotStart + self.epochWidth * qu.s, self.presentPlotStart + 2 * self.epochWidth * qu.s)
+            self.draw(self.presentPlotStart + self.epochWidth, self.presentPlotStart + 2 * self.epochWidth)
 
     def plotPrevInterval(self):
 
-        if self.presentPlotStart - self.epochWidth * qu.s > self.rdi.vibrationSignal.t_start:
+        if self.presentPlotStart - self.epochWidth > self.rdi.vibrationSignal.t_start:
 
-            self.draw(self.presentPlotStart - self.epochWidth * qu.s, self.presentPlotStart)
+            self.draw(self.presentPlotStart - self.epochWidth, self.presentPlotStart)
 
 
 

@@ -1,44 +1,133 @@
 from neo import Spike2IO, AnalogSignal
 import os
-import pyexcel_xlsx
-import pyexcel as pe
-import pyexcel.ext.xlsx
+import pandas as pd
 import time
+from GJEMS.ephys.neoNIXIO import addQuantity2section, addAnalogSignal2Block
+from GJEMS.ephys.NEOFuncs import downSampleAnalogSignal, sliceAnalogSignal
+import nixio as nix
 from matplotlib import pyplot as plt
-import quantities as qu
-from neo import AnalogSignal
 import numpy as np
-
+import json
+import quantities as qu
+import operator
 
 #***********************************************************************************************************************
 
-def extractMetaData(excelFile, excelSheet, expName):
+def smrFilesPresent(expNames, smrDir):
+    temp1 = []
+    for expName in expNames:
 
-    metaDataSheet = pe.get_sheet(file_name=excelFile, sheet_name=excelSheet)
-    lne1 = metaDataSheet.row_at(0)
-    lne2 = metaDataSheet.row_at(1)
+        expDir = os.path.join(smrDir, expName[:8])
+        if os.path.isdir(expDir):
+            dirList = os.listdir(expDir)
+            matches = [x.endswith('.smr') and x[:10] == expName for x in dirList]
+            smrFilePresent = any(matches)
 
-    freqCol = lne2.index('Frequency')
-    pulseCol = lne2.index('Pulse (Duration/Interval)')
-    spontCol = lne2.index('Spontaneous')
-    respCol = lne2.index('Response')
+        else:
+            smrFilePresent = False
+
+        temp1.append(smrFilePresent)
+    temp1 = np.array(temp1).reshape((len(temp1), 1))
+    return temp1
+
+#***********************************************************************************************************************
+
+def addDyeNamesIfNess(expNames, smrDir):
+    newIndices = {}
+    for expName in expNames:
+
+        expDir = os.path.join(smrDir, expName[:8])
+        if os.path.isdir(expDir):
+            dirList = os.listdir(expDir)
+            matches = [x.endswith('.smr') and x[:8] == expName[:8] for x in dirList]
+            newIndex = dirList[matches.index(True)][:-4]
+            if len(newIndex) > len(expName):
+                newIndices[expName] = newIndex
+            else:
+                newIndices[expName] = expName
+
+        else:
+            newIndices[expName] = expName
+
+    return newIndices
+
+
+#***********************************************************************************************************************
+def parseMetaDataFile(excelFile, excelSheet, smrDir):
+
+    tempDf = pd.read_excel(excelFile, sheetname=excelSheet, header=None, parse_cols=None)
+
+    currentVal = tempDf.loc[0, 0]
+    for ind, val in enumerate(tempDf.loc[0, 1:]):
+        if pd.isnull(val):
+            tempDf.loc[0, ind + 1] = currentVal
+        else:
+            currentVal = val
+
+    for ind, val in enumerate(tempDf.loc[1, :]):
+
+        if pd.isnull(val):
+            tempDf.loc[1, ind] = tempDf.loc[0, ind]
+
+    metaDF = tempDf.loc[3:, 1:]
+    metaDF.index = tempDf.loc[3:, 0]
+    metaDF.columns = pd.MultiIndex.from_arrays((tempDf.loc[0, 1:], tempDf.loc[1, 1:]))
+    metaDF.sort_index()
+
+    newIndices = addDyeNamesIfNess(metaDF.index, smrDir)
+    metaDF = metaDF.rename(index=newIndices)
+
+    markedUploaded = (metaDF.loc[:, ('Powerfolder', 'LSM')] == '*').values
+    smrsPresent = smrFilesPresent(metaDF.index, smrDir)
+
+    problem = np.logical_and(markedUploaded, np.logical_not(smrsPresent))
+
+    if any(problem):
+        print('These experiments were marked uploaded but were not found in {}:\n{}\nIGNORING THESE'
+              .format(smrDir, [x for x, y in zip(metaDF.index, problem) if y]))
+
+    metaDFFiltered = metaDF[smrsPresent]
+
+    return metaDFFiltered
+
+#***********************************************************************************************************************
+
+def extractMetaData(mdDF, expName):
+
+    expData = mdDF.loc[expName]
+
+    freqEntry = str(expData[('Stimulus', 'Frequency')])
+    pulseEntry = expData[('Stimulus', 'Pulse (Duration/Interval)')]
+    spontEntry = expData[('Activity', 'Spontaneous')]
+    respEntry = expData[('Activity', 'Response')]
+
 
     metaData = {}
     metaData['pulse'] = [[], []]
+    metaData['freqs'] = []
+    metaData['spont'] = ''
+    metaData['resp'] = ''
 
-    expRow = metaDataSheet.column_at(0).index(unicode(expName))
+    if not pd.isnull(freqEntry):
+        if freqEntry.find(',') < 0:
 
-    expData = metaDataSheet.row_at(expRow)
+            # sometimes the commas are not read in, leading to concatenated entries like 100265. Splitting them.
+            tempN = len(freqEntry)
+            for x in xrange(int(np.ceil(tempN / 3.0))):
 
-    if isinstance(expData[freqCol], int):
-        metaData['freqs'] = expData[freqCol] * qu.Hz
-    else:
-        metaData['freqs'] = qu.Quantity([float(x) for x in expData[freqCol].split(',') if not x == ''], qu.Hz)
+                metaData['freqs'].append(int(freqEntry[max(0, tempN - (x + 1) * 3): tempN - 3 * x]))
 
-    if expData[pulseCol]:
+        else:
+            metaData['freqs'] = map(lambda x: int(x), freqEntry.split(','))
+
+    metaData['freqs'] *= qu.Hz
+
+    if not pd.isnull(pulseEntry):
         unresolved = []
+        # pulseEntry is expected to be made of two types of entries:
+        # (i) a/b (ii) a, c / b which is the same as a/b , c/b
         try:
-            for word in expData[pulseCol].split(','):
+            for word in pulseEntry.split(','):
                 if word.count('/'):
                     (duration, interval) = word.split('/')
                     unresolved.append(float(duration))
@@ -54,11 +143,15 @@ def extractMetaData(excelFile, excelSheet, expName):
         except:
             raise(Exception('Improper entry in pulse column for the given smr file.'))
 
-    metaData['pulse'][0] = qu.Quantity(metaData['pulse'][0], qu.ms)
-    metaData['pulse'][1] = qu.Quantity(metaData['pulse'][1], qu.ms)
-    spontStr = expData[spontCol]
-    metaData['spont'] = bool(spontStr.count('yes') + spontStr.count('Yes') + spontStr.count('YES'))
-    metaData['resp'] = str(expData[respCol])
+    metaData['pulse'][0] *= qu.ms
+    metaData['pulse'][1] *= qu.ms
+
+    if not pd.isnull(spontEntry):
+        metaData['spont'] = bool(spontEntry.count('yes') + spontEntry.count('Yes') + spontEntry.count('YES'))
+
+
+    if not pd.isnull(respEntry):
+        metaData['resp'] = str(respEntry)
 
     return metaData
 
@@ -85,12 +178,13 @@ def parseCalibString(calibString):
         startTimeStr = calibString[openingBracketAt + 1: dashAt]
         endTimeStr = calibString[dashAt + 1: closingBracketAt]
 
-        if endTimeStr == 'maxtime':
+        if endTimeStr in ['maxtime', 'max time', 'Max Time']:
             endTime = None
-
         else:
-
             endTime = float(endTimeStr[:-3]) * qu.s
+
+        if startTimeStr.endswith('sec'):
+            startTimeStr = startTimeStr[:-3]
 
         startTime = float(startTimeStr) * qu.s
 
@@ -104,7 +198,7 @@ def parseCalibString(calibString):
 
 # **********************************************************************************************************************
 
-def calibrateSignal(inputSignal, calibStrings):
+def calibrateSignal(inputSignal, calibStrings, forceUnits=None):
 
     ipSignalMag = inputSignal.magnitude
     ipSigUnits = inputSignal.units
@@ -125,11 +219,14 @@ def calibrateSignal(inputSignal, calibStrings):
 
         ipSignalMag[startIndex: endIndex + 1] *= calib.magnitude
 
-        if ipSigUnits == qu.Quantity(1):
-            ipSigUnits = calib.units
+        if forceUnits is not None:
+            ipSigUnits = forceUnits
+        else:
+            if ipSigUnits == qu.Quantity(1):
+                ipSigUnits = calib.units
 
-        elif ipSigUnits != calib.units:
-            raise(Exception('CalibStrings given don\'t have the same units'))
+            elif ipSigUnits != calib.units:
+                raise(Exception('CalibStrings given don\'t have the same units'))
 
         outputSignal = AnalogSignal(
                                     signal=ipSignalMag,
@@ -141,9 +238,9 @@ def calibrateSignal(inputSignal, calibStrings):
 
 # **********************************************************************************************************************
 
-def readSignal(rawSignal, calibStrings, timeWindow):
+def readSignal(rawSignal, calibStrings, timeWindow, forceUnits=None):
 
-    calibSignal = calibrateSignal(rawSignal, calibStrings)
+    calibSignal = calibrateSignal(rawSignal, calibStrings, forceUnits)
 
     startInd = int((timeWindow[0] - calibSignal.t_start) * calibSignal.sampling_rate.magnitude)
     endInd = int((timeWindow[1] - calibSignal.t_start) * calibSignal.sampling_rate.magnitude)
@@ -152,180 +249,192 @@ def readSignal(rawSignal, calibStrings, timeWindow):
 
 # **********************************************************************************************************************
 
+def parseSpike2Data(smrFile, startStop=None, forceUnits=False):
+    spike2Reader = Spike2IO(smrFile)
+    dataBlock = spike2Reader.read()[0]
+    voltageCalibs = dataBlock.segments[0].eventarrays[0].annotations['extra_labels']
+    entireVoltageSignal = dataBlock.segments[0].analogsignals[0]
 
-class RawDataImporter(object):
+    vibrationCalibs = dataBlock.segments[0].eventarrays[1].annotations['extra_labels']
+    entireVibrationSignal = dataBlock.segments[0].analogsignals[1]
 
-    def __init__(self, smrFile, excelFile, excelSheet):
+    entireCurrentSignal = None
+    if len(dataBlock.segments[0].analogsignals) > 2:
+        if 'extra_labels' in dataBlock.segments[0].eventarrays[3].annotations:
+            currentCalibs = dataBlock.segments[0].eventarrays[3].annotations['extra_labels']
+            entireCurrentSignal = dataBlock.segments[0].analogsignals[2]
 
-        assert os.path.isfile(smrFile), 'SMR file not found:' + smrFile
-        assert os.path.isfile(excelFile), 'Excel file not found:' + excelFile
+    if startStop is None:
+        recordingStartTime = dataBlock.segments[0].eventarrays[2].times[0]
 
-        self.expName = os.path.split(smrFile)[1].strip('.smr')
+        recordingEndTime = dataBlock.segments[0].eventarrays[2].times[1]
+    else:
+        recordingStartTime = startStop[0] * qu.s
+        recordingEndTime = startStop[1] * qu.s
 
-        spike2Reader = Spike2IO(smrFile)
-        self.dataBlock = spike2Reader.read()[0]
+    recordingStartTime = max(recordingStartTime,
+                             entireVibrationSignal.t_start,
+                             entireVoltageSignal.t_start)
+    recordingEndTime = min(recordingEndTime,
+                           entireVibrationSignal.t_stop,
+                           entireVoltageSignal.t_stop)
 
-        self.metaData = extractMetaData(excelFile, excelSheet, self.expName)
+    if forceUnits:
+        voltForceUnits = qu.mV
+        vibForceUnits = qu.um
+        currForceUnits = qu.nA
+    else:
+        voltForceUnits = vibForceUnits = currForceUnits = None
 
-        self.currentSignal = None
+    voltageSignal = readSignal(entireVoltageSignal, voltageCalibs, [recordingStartTime, recordingEndTime],
+                               voltForceUnits)
+    voltageSignal.name = 'MembranePotential'
 
-        self.maximumFreq = 700 * qu.Hz
+    vibrationSignal = readSignal(entireVibrationSignal, vibrationCalibs, [recordingStartTime, recordingEndTime],
+                                 vibForceUnits)
+    vibrationSignal.name = 'VibrationStimulus'
 
-    #*******************************************************************************************************************
+    currentSignal = None
+    if len(dataBlock.segments[0].analogsignals) > 2:
+        if 'extra_labels' in dataBlock.segments[0].eventarrays[3].annotations:
+            currentSignal = readSignal(entireCurrentSignal, currentCalibs, [recordingStartTime, recordingEndTime],
+                                       currForceUnits)
+            currentSignal.name = 'CurrentInput'
 
-    def parseSpike2Data(self):
+    return voltageSignal, vibrationSignal, currentSignal
 
-        voltageCalibs = self.dataBlock.segments[0].eventarrays[0].annotations['extra_labels']
-        entireVoltageSignal = self.dataBlock.segments[0].analogsignals[0]
-        entireVoltageSignal.sampling_rate = (1 / 4.8e-5) * qu.Hz
+# **********************************************************************************************************************
 
-        vibrationCalibs = self.dataBlock.segments[0].eventarrays[1].annotations['extra_labels']
-        entireVibrationSignal = self.dataBlock.segments[0].analogsignals[1]
-
-        if len(self.dataBlock.segments[0].analogsignals) > 2:
-            currentCalibs = self.dataBlock.segments[0].eventarrays[3].annotations['extra_labels']
-            entireCurrentSignal = self.dataBlock.segments[0].analogsignals[2]
-
-        recordingStartTime = self.dataBlock.segments[0].eventarrays[2].times[0]
-        recordingEndTime = self.dataBlock.segments[0].eventarrays[2].times[1]
-
-        self.voltageSignal = readSignal(entireVoltageSignal, voltageCalibs, [recordingStartTime, recordingEndTime])
-        self.voltageSignal.name = 'MembranePotential'
-
-        self.vibrationSignal = readSignal(entireVibrationSignal, vibrationCalibs, [recordingStartTime, recordingEndTime])
-        self.vibrationSignal.name = 'VibrationStimulus'
-
-        if len(self.dataBlock.segments[0].analogsignals) > 2:
-            self.currentSignal = readSignal(entireCurrentSignal, currentCalibs, [recordingStartTime, recordingEndTime])
-            self.currentSignal.name = 'CurrentInput'
-
-    #*******************************************************************************************************************
-
-    def downSampleVibSignal(self):
-
-        self.downSamplingFactor = int(round(self.vibrationSignal.sampling_rate / (4 * self.maximumFreq)))
-        newSamplingRate = self.vibrationSignal.sampling_rate / self.downSamplingFactor
-        downSamplingIndices = range(0, self.vibrationSignal.shape[0], self.downSamplingFactor)
-
-        self.vibrationSignalDown = AnalogSignal(signal=self.vibrationSignal.magnitude[downSamplingIndices],
-                                                units=self.vibrationSignal.units,
-                                                sampling_rate=newSamplingRate,
-                                                t_start=self.vibrationSignal.t_start)
-
-        self.vibrationSignalDown -= np.median(self.vibrationSignalDown)
-
-        self.vibrationSignalDownStdDev = np.std(self.vibrationSignalDown)
+def saveNixFile(smrFile, nixFile, metaData, startStop=None, askShouldReplace=True, forceUnits=False):
+    voltageSignal, vibrationSignal, currentSignal = parseSpike2Data(smrFile, startStop, forceUnits)
 
 
-    #*******************************************************************************************************************
+    if os.path.isfile(nixFile):
 
-    def downSampleVoltageSignal(self, downSamplingFactor=None):
+        if askShouldReplace:
+            ch = raw_input('File Already Exists. Overwrite?(y/n):')
 
-        if downSamplingFactor is None:
+            if ch != 'y':
+                exit('Aborted.')
 
-            downSamplingFactor = self.downSamplingFactor
+        os.remove(nixFile)
 
-        newSamplingRate = self.voltageSignal.sampling_rate / downSamplingFactor
-        downSamplingIndices = range(0, self.voltageSignal.shape[0], downSamplingFactor)
+    nixFileO = nix.File.open(nixFile, nix.FileMode.Overwrite)
 
-        voltageSignalDown = AnalogSignal(signal=self.voltageSignal.magnitude[downSamplingIndices],
-                                                units=self.voltageSignal.units,
-                                                sampling_rate=newSamplingRate,
-                                                t_start=self.voltageSignal.t_start)
+    vibStimSec = nixFileO.create_section('VibrationStimulii-Raw', 'Recording')
 
-        return voltageSignalDown
+    vibStimSec.create_property('NatureOfResponse', [nix.Value(metaData['resp'])])
+    vibStimSec.create_property('SpontaneousActivity', [nix.Value(metaData['spont'])])
+
+    contStimSec = vibStimSec.create_section('ContinuousStimulii', 'Stimulii/Sine')
+
+    if any(metaData["freqs"]):
+        addQuantity2section(contStimSec, metaData['freqs'], 'FrequenciesUsed')
+
+    if all(map(len, metaData['pulse'])):
+        pulseStimSec = vibStimSec.create_section('PulseStimulii', 'Stimulii/Pulse')
+        addQuantity2section(pulseStimSec, 265 * qu.Hz, 'FrequenciesUsed')
+
+        addQuantity2section(pulseStimSec, metaData['pulse'][0], 'PulseDurations')
+        addQuantity2section(pulseStimSec, metaData['pulse'][1], 'PulseIntervals')
+
+    rawDataBlk = nixFileO.create_block('RawDataTraces', 'RecordingData')
+
+    vibSig = addAnalogSignal2Block(rawDataBlk, vibrationSignal)
+
+    voltSig = addAnalogSignal2Block(rawDataBlk, voltageSignal)
+
+    if currentSignal is not None:
+        curSig = addAnalogSignal2Block(rawDataBlk, currentSignal)
+
+    nixFileO.close()
+
+# **********************************************************************************************************************
+
+def importAll(smrPath, excelFile, excelSheet, nixPath, expNames=None,
+              startStopFile=None, askShouldReplace=True, forceUnits=False):
+
+    metaDataDF = parseMetaDataFile(excelFile, excelSheet, smrPath)
+
+    if expNames is None:
+        expNames = map(str, metaDataDF.index)
+
+    adjustedStartStop = {}
+    if startStopFile:
+        with open(startStopFile, 'r') as fle:
+            adjustedStartStop = json.load(fle)
+
+    for expName in expNames:
+
+        if expName not in metaDataDF.index:
+
+            raise(ValueError('Experiment with ID {} not found in {}'.format(expName, excelFile)))
+
+        print('Doing {}'.format(expName))
+        metaData = extractMetaData(metaDataDF, expName)
+
+        smrFile = os.path.join(smrPath, expName[:8], expName + '.smr')
+        nixFile = os.path.join(nixPath, expName + '.h5')
+
+        startStop = None
+        if expName in adjustedStartStop:
+            startStop = adjustedStartStop[expName]
+        saveNixFile(smrFile, nixFile, metaData, startStop, askShouldReplace, forceUnits)
+
+# **********************************************************************************************************************
+
+class RawDataViewer(object):
+
+    def __init__(self, smrFile, maxFreq=700*qu.Hz, forceUnits=False):
+
+        expName = os.path.split(smrFile)[1][:-4]
+
+        signals = parseSpike2Data(smrFile, [-np.inf, np.inf], forceUnits)
+
+        signalSamplingRates = [x.sampling_rate for x in signals if x is not None]
+        assert (np.diff(signalSamplingRates) < 1 * qu.Hz).all(), \
+            'Signals do not have same sampling rate\n{}'.format(reduce(lambda x, y: x + '\n' + y, map(repr, signals)))
+
+        self.voltageSignal = downSampleAnalogSignal(signals[0], int(signals[0].sampling_rate / maxFreq))
+        self.vibrationSignal = downSampleAnalogSignal(signals[1], int(signals[1].sampling_rate / maxFreq))
 
 
-    #*******************************************************************************************************************
+        if signals[2] is not None:
+            self.currentSignal = downSampleAnalogSignal(signals[2], int(signals[2].sampling_rate / maxFreq))
+        else:
+            self.currentSignal = None
 
-    def downSampleCurrentSignal(self, downSamplingFactor=None):
 
-        if downSamplingFactor is None:
 
-            downSamplingFactor = self.downSamplingFactor
-
-        newSamplingRate = self.currentSignal.sampling_rate / downSamplingFactor
-        downSamplingIndices = range(0, self.currentSignal.shape[0], downSamplingFactor)
-
-        currentSignalDown = AnalogSignal(signal=self.currentSignal.magnitude[downSamplingIndices],
-                                                units=self.currentSignal.units,
-                                                sampling_rate=newSamplingRate,
-                                                t_start=self.currentSignal.t_start)
-
-        return currentSignalDown
-
-    #*******************************************************************************************************************
 
     def plotVibEpoch(self, ax, epochTimes, signal=None, points=False):
 
-        # indStart = int(epochTimes[0] * qu.s * self.entireVibrationSignal.sampling_rate + self.recordingStartIndex)
-        # indEnd = int(epochTimes[1] * qu.s * self.entireVibrationSignal.sampling_rate + self.recordingStartIndex)
+        marker = '*' if points else 'None'
 
-        # epochTVec = self.entireVibrationSignal.t_start + np.arange(indStart, indEnd) * self.entireVibrationSignal.sampling_period
+        epochVoltSignal = sliceAnalogSignal(self.voltageSignal, epochTimes[0], epochTimes[1])
+        ax.plot(epochVoltSignal.times, epochVoltSignal, ls='-', color='b', marker=marker,
+                label='Membrane potential (mV)')
+        epochVibSignal = sliceAnalogSignal(self.vibrationSignal, epochTimes[0], epochTimes[1])
+        ax.plot(epochVibSignal.times, epochVibSignal, ls='-', color='r', marker=marker,
+                label='Vibration Input to Antenna (um)')
 
-        # plt.plot(epochTVec, self.entireVibrationSignal[indStart:indEnd], 'g' + extra)
+        if self.currentSignal:
+            epochCurSignal = sliceAnalogSignal(self.currentSignal, epochTimes[0], epochTimes[1])
+            ax.plot(epochCurSignal.times, epochCurSignal, ls='-', color='r', marker=marker,
+                    label='Current input through electrode (nA)')
 
-        self.downSampleVibSignal()
+        if signal:
 
-        voltageSignalDown = self.downSampleVoltageSignal()
-
-        indStart = int(np.floor((epochTimes[0] - self.vibrationSignalDown.t_start) * self.vibrationSignalDown.sampling_rate))
-        indEnd = int(np.floor((epochTimes[1] - self.vibrationSignalDown.t_start) * self.vibrationSignalDown.sampling_rate))
-
-        epochTVec = self.vibrationSignalDown.t_start + np.arange(indStart, indEnd) * self.vibrationSignalDown.sampling_period
-
-
-
-        extra = ''
-        if points:
-            extra = '*-'
-
-        ax.cla()
-
-        ax.plot(epochTVec.magnitude, self.vibrationSignalDown[indStart:indEnd].magnitude, 'g' + extra,
-                label='vibration signal')
-        plt.xlabel('time (' + str(epochTVec.units) + ')')
-        ax.plot(epochTVec.magnitude, voltageSignalDown[indStart:indEnd].magnitude, 'b' + extra,
-                label='voltage signal')
+            epochSignal = sliceAnalogSignal(signal, epochTimes[0], epochTimes[1])
+            ax.plot(epochSignal.times, epochSignal, ls='-', color='m', marker=marker,
+                    label='External Signal')
 
 
+        ax.legend(ncol=2, loc='best')
+        ax.set_xlabel('Time ({})'.format(epochVoltSignal.times.units.dimensionality.string))
 
-        if len(self.dataBlock.segments[0].analogsignals) > 2:
-            currentSignalDown = self.downSampleCurrentSignal()
-            ax.plot(epochTVec.magnitude,currentSignalDown[indStart:indEnd].magnitude, 'r' + extra,
-                              label='current input')
-
-
-
-        if signal is not None:
-
-
-            newSamplingRate = signal.sampling_rate / self.downSamplingFactor
-            downSamplingIndices = range(0, signal.shape[0], self.downSamplingFactor)
-
-            signalDown = AnalogSignal(signal=signal.magnitude[downSamplingIndices],
-                                                    units=signal.units,
-                                                    sampling_rate=newSamplingRate,
-                                                    t_start=signal.t_start)
-
-            signalIndStart = int(np.floor((epochTimes[0] * qu.s - signal.t_start) * newSamplingRate))
-            signalIndEnd = int(np.floor((epochTimes[1] * qu.s - signal.t_start) * newSamplingRate))
-
-            if (signalIndEnd - signalIndStart) > epochTVec.shape[0]:
-                signalIndStart += 1
-            elif (signalIndEnd - signalIndStart) < epochTVec.shape[0]:
-                signalIndEnd += 1
-
-
-            ax.plot(epochTVec, signalDown[signalIndStart:signalIndEnd], 'm' + extra, label='external signal')
-
-        ax.set_xlabel('time (s)')
-        ax.set_ylabel('Voltage signal(mV), vibration signal(um), current signal(nA)')
-        ax.legend()
-
-
-    #*******************************************************************************************************************
-
+    # ******************************************************************************************************************
+# **********************************************************************************************************************
 
 
 
