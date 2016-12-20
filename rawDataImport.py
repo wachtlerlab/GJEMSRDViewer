@@ -259,7 +259,7 @@ def parseSpike2Data(smrFile, startStop=None, forceUnits=False):
     entireVibrationSignal = dataBlock.segments[0].analogsignals[1]
 
     entireCurrentSignal = None
-    if len(dataBlock.segments[0].analogsignals) > 2:
+    if (len(dataBlock.segments[0].analogsignals) > 2) and (len(dataBlock.segments[0].eventarrays) > 2):
         if 'extra_labels' in dataBlock.segments[0].eventarrays[3].annotations:
             currentCalibs = dataBlock.segments[0].eventarrays[3].annotations['extra_labels']
             entireCurrentSignal = dataBlock.segments[0].analogsignals[2]
@@ -418,12 +418,12 @@ class RawDataViewer(object):
         ax.plot(epochVibSignal.times, epochVibSignal, ls='-', color='r', marker=marker,
                 label='Vibration Input to Antenna (um)')
 
-        if self.currentSignal:
+        if self.currentSignal is not None:
             epochCurSignal = sliceAnalogSignal(self.currentSignal, epochTimes[0], epochTimes[1])
             ax.plot(epochCurSignal.times, epochCurSignal, ls='-', color='r', marker=marker,
                     label='Current input through electrode (nA)')
 
-        if signal:
+        if signal is not None:
 
             epochSignal = sliceAnalogSignal(signal, epochTimes[0], epochTimes[1])
             ax.plot(epochSignal.times, epochSignal, ls='-', color='m', marker=marker,
