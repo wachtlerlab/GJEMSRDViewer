@@ -2,7 +2,7 @@ import sys
 from PyQt4 import QtGui, QtCore
 import os
 from mplwidget import MatplotlibWidget
-from rawDataImport import RawDataViewer, parseMetaDataFile, extractMetaData
+from rawDataImport import RawDataViewer
 import quantities as qu
 import numpy as np
 
