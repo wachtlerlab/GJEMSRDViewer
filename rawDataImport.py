@@ -1,12 +1,11 @@
 from neo import Spike2IO, AnalogSignal
 import os
-from GJEMS.ephys.neoNIXIO import addQuantity2section, addAnalogSignal2Block
-from GJEMS.ephys.NEOFuncs import downSampleAnalogSignal, sliceAnalogSignal
+from neoNIXIO import addQuantity2section, addAnalogSignal2Block
+from NEOFuncs import downSampleAnalogSignal, sliceAnalogSignal
 import nixio as nix
 import numpy as np
 import json
 import quantities as qu
-import pandas as pd
 
 
 # **********************************************************************************************************************
@@ -235,9 +234,10 @@ class RawDataViewer(object):
             ax.plot(epochSignal.times, epochSignal, ls='-', color='m', marker=marker,
                     label='External Signal')
 
-
         ax.legend(ncol=2, loc='best')
         ax.set_xlabel('Time ({})'.format(epochVoltSignal.times.units.dimensionality.string))
+        ax.set_ylim(min(epochVibSignal.magnitude.min(), epochVoltSignal.magnitude.min()),
+                    max(epochVibSignal.magnitude.max(), epochVoltSignal.magnitude.max()))
 
     # ******************************************************************************************************************
 # **********************************************************************************************************************

@@ -1,4 +1,7 @@
-import nix
+# Ajayrama Kumaraswamy, 2016
+# Ginjang Project, LMU
+
+import nixio as nix
 import neo
 import quantities as qu
 import numpy as np
@@ -9,12 +12,16 @@ quUnitStr = lambda x: x.dimensionality.string
 #***********************************************************************************************************************
 
 def addAnalogSignal2Block(blk, analogSignal):
+    '''
+    Create a new data array in the block blk and add the data in analogSignal to it
+    :param blk: nix.block
+    :param analogSignal: neo.analogsignal
+    :return: data, nix.data_array, the newly added data_array
+    '''
 
     assert hasattr(analogSignal, 'name'), 'Analog signal has no name'
 
     data = blk.create_data_array(analogSignal.name, 'nix.regular_sampled', data=analogSignal.magnitude)
-
-
 
     data.unit = quUnitStr(analogSignal)
     data.label = analogSignal.name
@@ -31,16 +38,20 @@ def addAnalogSignal2Block(blk, analogSignal):
 #***********************************************************************************************************************
 
 def dataArray2AnalogSignal(dataArray):
+    '''
+    Converts a nix data_array into a neo analogsignal of shape (<size of data array>,)
+    and having unit equivalent to the unit of the first sampled dimension of the data array.
+    :param dataArray: nix.data_array
+    :return: neo.analogsignal
+    '''
 
-    for dim in dataArray.dimensions:
+    assert len(dataArray.dimensions) == 1, 'Only one dimensional arrays are supported'
+    dim = dataArray.dimensions[0]
+    assert isinstance(dim, nix.pycore.SampledDimension), 'Only Sampled Dimensions' \
+                                                         'are supported'
 
-        if isinstance(dim, nix.SampledDimension):
-
-            t_start = qu.Quantity(dim.offset, units=dim.unit)
-            samplingPeriod = qu.Quantity(dim.sampling_interval, units=dim.unit)
-
-            break
-
+    t_start = qu.Quantity(dim.offset, units=dim.unit)
+    samplingPeriod = qu.Quantity(dim.sampling_interval, units=dim.unit)
 
     analogSignal = neo.AnalogSignal(signal=dataArray[:],
                                     units=dataArray.unit,
@@ -49,17 +60,30 @@ def dataArray2AnalogSignal(dataArray):
 
     analogSignal.name = dataArray.name
 
+    analogSignal = analogSignal.reshape((analogSignal.shape[0],))
     return analogSignal
 
 #***********************************************************************************************************************
 
 def property2qu(property):
+    '''
+    Convert a nix property to a quantities Quantity
+    :param property: nix.property
+    :return: quantities.Quantity
+    '''
 
     return qu.Quantity([v.value for v in property.values], units=property.unit)
 
 #***********************************************************************************************************************
 
 def addQuantity2section(sec, quant, name):
+    '''
+    Create new property in section sec and add the data in quantity.Quantitiy quant to it
+    :param sec: nix.section
+    :param quant: quantities.Quantity
+    :param name: name of the property to add
+    :return: p, nix.property, the property added.
+    '''
 
     if quant.shape == ():
 
@@ -86,6 +110,13 @@ def addQuantity2section(sec, quant, name):
 #***********************************************************************************************************************
 
 def createPosDA(name, pos, blk):
+    '''
+    Create a data_array of type 'nix.positions' with the pos data in the block blk
+    :param name: string, name of the data_array to create
+    :param pos: iterable of floats, data to be added to the created data_array
+    :param blk: nix.block, the block in which the data_array is to be created
+    :return: positions, nix.data_array, the newly created data_array
+    '''
 
     positions = blk.create_data_array(name, 'nix.positions', data=pos)
     positions.append_set_dimension()
@@ -96,6 +127,13 @@ def createPosDA(name, pos, blk):
 #***********************************************************************************************************************
 
 def createExtDA(name, ext, blk):
+    '''
+   Create a data_array of type 'nix.extents' with the pos data in the block blk
+   :param name: string, name of the data_array to create
+   :param ext: iterable of floats, data to be added to the created data_array
+   :param blk: nix.block, the block in which the data_array is to be created
+   :return: extents, nix.data_array, the newly created data_array
+   '''
 
     extents = blk.create_data_array(name, 'nix.extents', data=ext)
     extents.append_set_dimension()
@@ -106,6 +144,12 @@ def createExtDA(name, ext, blk):
 #***********************************************************************************************************************
 
 def tag2AnalogSignal(tag, refInd):
+    '''
+    Create a neo.analogsignal from the snippet of data represented by a nix.tag and its reference at index refInd
+    :param tag: nix.tag
+    :param refInd: the index of the reference among those of the tag to use
+    :return: neo.analogsignal with the snipped of reference data tagged by tag.
+    '''
 
     ref = tag.references[refInd]
     dim = ref.dimensions[0]
@@ -122,6 +166,7 @@ def tag2AnalogSignal(tag, refInd):
                                     sampling_period=qu.Quantity(ts, units=dim.unit),
                                     t_start=qu.Quantity(offset + startInd * ts, units=dim.unit))
 
+    analogSignal = analogSignal.reshape((analogSignal.shape[0],))
     # trace = tag.retrieve_data(refInd)[:]
     # tVec = tag.position[0] + np.linspace(0, tag.extent[0], trace.shape[0])
 
@@ -129,9 +174,125 @@ def tag2AnalogSignal(tag, refInd):
 
 #***********************************************************************************************************************
 
+def getTagPosExt(tag):
+
+    position = tag.position[0] * qu.Quantity(1, units=tag.units[0])
+    extent = tag.extent[0] * qu.Quantity(1, units=tag.units[0])
+
+    return position, extent
+
+
+#***********************************************************************************************************************
 def multiTag2SpikeTrain(tag, tStart, tStop):
+    '''
+    Create a neo.spiketrain from nix.multitag
+    :param tag: nix.multitag
+    :param tStart: float, time of start of the spike train in units of the multitag
+    :param tStop: float, time of stop of the spike train in units of the multitag
+    :return: neo.spiketrain
+    '''
 
-    sp = neo.SpikeTrain(times=tag.positions[:], t_start=tStart, t_stop=tStop, units=tag.units[0])
+    sp = neo.SpikeTrain(times=[], t_start=tStart, t_stop=tStop, units=qu.s)
 
+    if len(tag.positions):
+        spikeTimes = np.array(tag.positions) * qu.Quantity(1, tag.units[0])
+
+        spikeTimesFiltered = spikeTimes[np.logical_and(spikeTimes > tStart, spikeTimes < tStop)]
+
+        if spikeTimesFiltered.shape[0]:
+            sp = neo.SpikeTrain(times=spikeTimesFiltered.magnitude,
+                                t_start=tStart, t_stop=tStop, units=tag.units[0])
     return sp
 
+
+#***********************************************************************************************************************
+
+def addMultiTag(name, type, positions, blk, refs, metadata=None, extents=None):
+    '''
+    Add a multi_tag to one or more data_arrays
+    :param name: string, name of the multi_tag
+    :param type: string, type of the multi_tag
+    :param positions: quantities.Quantity, positions of the multi_tag
+    :param blk: nix.Block, the block in which the multi_tag is to be created
+    :param refs: list, list of nix.data_array objects, to which the multi_tag refers
+    :param metadata: nix.Section, to which the the multi_tag refers
+    :param extents: nix.data_array, extents of the multi_tag
+    :return: nix.multi_tag, the newly created multi_tag
+    '''
+
+    refUnits0 = refs[0].dimensions[0].unit
+    for ref in refs:
+        assert len(ref.dimensions) == 1, 'Only 1D refs are supported for now.'
+        assert ref.dimensions[0].unit == refUnits0, 'refs must have same time units'
+
+    positionsUnitsNormed = simpleFloat(positions / qu.Quantity(1, units=refUnits0))
+    positionsDA = createPosDA('{}_DA'.format(name), positionsUnitsNormed, blk)
+    tag = blk.create_multi_tag(name, type, positionsDA)
+    tag.units = [str(refUnits0)]
+
+    if extents is not None:
+        tag.extents = extents
+
+    for ref in refs:
+        tag.references.append(ref)
+
+    if metadata is not None:
+        tag.metadata = metadata
+
+#***********************************************************************************************************************
+
+def addTag(name, type, position, blk, refs, metadata=None, extent=None):
+    '''
+    Add a tag to one or more data_arrays
+    :param name: string, name of the tag
+    :param type: string, type of the tag
+    :param position: float, position of the tag
+    :param blk: nix.Block, the block in which the multi_tag is to be created
+    :param refs: list, list of nix.data_array objects, to which the multi_tag refers
+    :param metadata: nix.Section, to which the the multi_tag refers
+    :param extent: float, extent of the multi_tag
+    :return: nix.tag, the newly created tag
+    '''
+    tag = blk.create_tag(name, type, [position])
+
+
+
+    if extent is not None:
+        tag.extent = [extent]
+
+    for ref in refs:
+        tag.references.append(ref)
+        tag.units = [str(ref.dimensions[0].unit)]
+
+    if metadata is not None:
+        tag.metadata = metadata
+
+
+#***********************************************************************************************************************
+
+def simpleFloat(quant):
+    '''
+    Float(s) of simplified version(s) of a quantity.Quantity or an iterable of quantity.Quantity objects
+    :param quant: a quantity.Quantity or an iterable of quantity.Quantity objects
+    :return: float or iterable of floats
+    '''
+
+    if quant.shape == ():
+
+        return float(quant.simplified)
+
+    elif len(quant.shape) == 1:
+
+        if quant.shape[0]:
+
+            return tuple(float(q.simplified) for q in quant)
+
+        else:
+
+            return ()
+
+    else:
+
+        raise(ValueError('simpleFloat only supports scalar and 1D quantities'))
+
+#***********************************************************************************************************************

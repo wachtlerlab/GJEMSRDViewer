@@ -8,14 +8,14 @@ import numpy as np
 
 mplPars = {'text.usetex': True,
            'axes.labelsize': 'large',
-           'axes.titlesize': 42,
+           'axes.titlesize': 16,
            'font.family': 'sans-serif',
            'font.sans-serif': 'computer modern roman',
-           'font.size': 42,
+           'font.size': 16,
            'font.weight': 'black',
-           'xtick.labelsize': 36,
-           'ytick.labelsize': 36,
-           'legend.fontsize': 20,
+           'xtick.labelsize': 14,
+           'ytick.labelsize': 14,
+           'legend.fontsize': 12,
            }
 
 
