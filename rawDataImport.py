@@ -225,7 +225,7 @@ class RawDataViewer(object):
 
         if self.currentSignal is not None:
             epochCurSignal = sliceAnalogSignal(self.currentSignal, epochTimes[0], epochTimes[1])
-            ax.plot(epochCurSignal.times, epochCurSignal, ls='-', color='r', marker=marker,
+            ax.plot(epochCurSignal.times, epochCurSignal, ls='-', color='g', marker=marker,
                     label='Current input through electrode (nA)')
 
         if signal is not None:
