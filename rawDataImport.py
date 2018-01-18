@@ -28,6 +28,35 @@ def parseStartStopStr(startStopStr):
 
 # **********************************************************************************************************************
 
+def parseInts2ExcludeStr(int2ExcludeStr, int2ExcludeUnitStr, recordingStartTime, recordingStopTime):
+
+    try:
+        if int2ExcludeStr.find(";") < 0:
+
+            int2Ex_StartTime, int2Ex_EndTime = parseStartStopStr(int2ExcludeStr)
+
+            int2Ex_StartTime *= qu.Quantity(1, units=int2ExcludeUnitStr)
+            int2Ex_EndTime *= qu.Quantity(1, units=int2ExcludeUnitStr)
+
+            return [(max(int2Ex_StartTime, recordingStartTime), min(int2Ex_EndTime, recordingStopTime))]
+
+        else:
+            ints2ExcludeStrs = int2ExcludeStr.split(";")
+            toReturn = []
+            for i in ints2ExcludeStrs:
+                int2Ex_StartTime, int2Ex_EndTime = parseStartStopStr(i)
+
+                int2Ex_StartTime *= qu.Quantity(1, units=int2ExcludeUnitStr)
+                int2Ex_EndTime *= qu.Quantity(1, units=int2ExcludeUnitStr)
+
+                toReturn.append((max(int2Ex_StartTime, recordingStartTime), min(int2Ex_EndTime, recordingStopTime)))
+
+        return toReturn
+
+    except Exception as e:
+        print("Error:{}".format(str(e)))
+        raise(ValueError("Improper 'Intervals to Exclude' {} string!".format(int2ExcludeStr)))
+
 
 def parseCalibString(calibString, unitStr):
 
@@ -72,7 +101,7 @@ def calibrateSignal(inputSignal, calibString, calibUnitStr, forceUnits=None):
     else:
         raise(ValueError("Improper Calibration string {}".format(calibString)))
 
-    ipSignalMag = inputSignal.magnitude
+    ipSignalMag = inputSignal.magnitude.copy()
     ipSigUnits = inputSignal.units
 
     for calibString in calibStrings:
@@ -89,32 +118,59 @@ def calibrateSignal(inputSignal, calibString, calibUnitStr, forceUnits=None):
 
         endIndex = int((endTime - inputSignal.t_start) * inputSignal.sampling_rate)
 
-        ipSignalMag[startIndex: endIndex + 1] *= calib.magnitude
+        ipSignalMag[startIndex: endIndex] *= calib.magnitude
 
-        if forceUnits is not None:
-            ipSigUnits = forceUnits
-        else:
-            if ipSigUnits == qu.Quantity(1):
-                ipSigUnits = calib.units
+    if forceUnits is not None:
+        ipSigUnits = forceUnits
+    else:
+        if ipSigUnits == qu.Quantity(1):
+            ipSigUnits = calib.units
 
-            elif ipSigUnits != calib.units:
-                raise(Exception('CalibStrings given don\'t have the same units'))
+        elif ipSigUnits != calib.units:
+            raise(Exception('CalibStrings given don\'t have the same units'))
 
 
-        outputSignal = AnalogSignal(
-                                    signal=ipSignalMag,
-                                    units=ipSigUnits,
-                                    sampling_rate=inputSignal.sampling_rate
-                                    )
-        outputSignal = outputSignal.reshape((outputSignal.shape[0],))
+    outputSignal = AnalogSignal(
+                                signal=ipSignalMag,
+                                units=ipSigUnits,
+                                sampling_rate=inputSignal.sampling_rate,
+                                t_start=inputSignal.t_start
+                                )
+    outputSignal = outputSignal.reshape((outputSignal.shape[0],))
 
     return outputSignal
 
 # **********************************************************************************************************************
 
-def readSignal(rawSignal, calibStrings, calibUnitStr, timeWindow, forceUnits=None):
 
-    calibSignal = calibrateSignal(rawSignal, calibStrings, calibUnitStr, forceUnits)
+def excludeIntervals(inputSignal, ints2ExcludeStr=None):
+
+    if ints2ExcludeStr is None:
+        return inputSignal
+    else:
+        ints2Exclude = parseInts2ExcludeStr(ints2ExcludeStr, 's',
+                                            inputSignal.t_start, inputSignal.t_stop)
+        outputSignal = inputSignal.copy()
+        for stTime, endTime in ints2Exclude:
+            stInd = int((stTime - inputSignal.t_start) * inputSignal.sampling_rate)
+            endInd = int((endTime - inputSignal.t_start) * inputSignal.sampling_rate)
+
+            leftValue = inputSignal[stInd]
+            rightValue = inputSignal[endInd]
+            slope = (rightValue - leftValue) / (endInd - stInd)
+            replacementSignal = leftValue + slope * np.arange(endInd - stInd + 1)
+            replacementSignal = replacementSignal.reshape((replacementSignal.shape[0], 1))
+            outputSignal[stInd: endInd + 1] = replacementSignal
+        return outputSignal
+
+
+
+# **********************************************************************************************************************
+
+def readSignal(rawSignal, calibStrings, calibUnitStr, timeWindow, forceUnits=None, ints2Exclude=None):
+
+    intsExcludedSignal = excludeIntervals(rawSignal, ints2Exclude)
+    calibSignal = calibrateSignal(intsExcludedSignal, calibStrings, calibUnitStr, forceUnits)
 
     startInd = int((timeWindow[0] - calibSignal.t_start) * calibSignal.sampling_rate.magnitude)
     endInd = int((timeWindow[1] - calibSignal.t_start) * calibSignal.sampling_rate.magnitude)
@@ -123,7 +179,7 @@ def readSignal(rawSignal, calibStrings, calibUnitStr, timeWindow, forceUnits=Non
 
 # **********************************************************************************************************************
 
-def parseSpike2Data(smrFile, calibStrings, startStop=None, forceUnits=False):
+def parseSpike2Data(smrFile, calibStrings, startStop=None, ints2ExcludeStr=None, forceUnits=False):
 
     spike2Reader = Spike2IO(smrFile)
     dataBlock = spike2Reader.read()[0]
@@ -166,11 +222,11 @@ def parseSpike2Data(smrFile, calibStrings, startStop=None, forceUnits=False):
         voltForceUnits = vibForceUnits = currForceUnits = None
 
     voltageSignal = readSignal(entireVoltageSignal, voltageCalibs, voltageCalibUnitStr,
-                               [recordingStartTime, recordingEndTime], voltForceUnits)
+                               [recordingStartTime, recordingEndTime], voltForceUnits, ints2ExcludeStr)
     voltageSignal.name = 'MembranePotential'
 
     vibrationSignal = readSignal(entireVibrationSignal, vibrationCalibs, vibrationCalibUnitStr,
-                                 [recordingStartTime, recordingEndTime], vibForceUnits)
+                                 [recordingStartTime, recordingEndTime], vibForceUnits, ints2ExcludeStr)
     vibrationSignal.name = 'VibrationStimulus'
 
     currentSignal = None
@@ -187,14 +243,14 @@ def parseSpike2Data(smrFile, calibStrings, startStop=None, forceUnits=False):
 
 class RawDataViewer(object):
 
-    def __init__(self, smrFile, maxFreq=700*qu.Hz, forceUnits=False):
+    def __init__(self, smrFile, voltageCalibStr, maxFreq=700*qu.Hz, ints2Exclude=None, forceUnits=False):
 
         calibStrings = {}
-        calibStrings['voltageCalibStr'] = '20'
+        calibStrings['voltageCalibStr'] = voltageCalibStr
         calibStrings['vibrationCalibStr'] = '27.1'
         calibStrings['currentCalibStr'] = '10'
 
-        signals = parseSpike2Data(smrFile, calibStrings, [-np.inf, np.inf], forceUnits)
+        signals = parseSpike2Data(smrFile, calibStrings, [-np.inf, np.inf], ints2Exclude, forceUnits)
 
         signalSamplingRates = [x.sampling_rate for x in signals if x is not None]
         assert (np.diff(signalSamplingRates) < 1 * qu.Hz).all(), \
@@ -208,9 +264,6 @@ class RawDataViewer(object):
             self.currentSignal = downSampleAnalogSignal(signals[2], int(signals[2].sampling_rate / maxFreq))
         else:
             self.currentSignal = None
-
-
-
 
     def plotVibEpoch(self, ax, epochTimes, signal=None, points=False):
 

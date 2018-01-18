@@ -4,9 +4,8 @@ import os
 from mplwidget import MatplotlibWidget
 from rawDataImport import RawDataViewer
 import quantities as qu
-import numpy as np
 
-mplPars = {'text.usetex': True,
+mplPars = {
            'axes.labelsize': 'large',
            'axes.titlesize': 16,
            'font.family': 'sans-serif',
@@ -25,22 +24,22 @@ class TitledText(QtGui.QGroupBox):
     def __init__(self, title, parent=None):
 
         QtGui.QGroupBox.__init__(self, title, parent)
-        self.dirPathW = QtGui.QLineEdit()
-        self.dirPathW.setMaxLength(120)
-        self.dirPathW.setMaximumHeight(30)
-        self.dirPathW.setSizePolicy(QtGui.QSizePolicy.Preferred, QtGui.QSizePolicy.Fixed)
+        self.line = QtGui.QLineEdit()
+        self.line.setMaxLength(120)
+        self.line.setMaximumHeight(30)
+        self.line.setSizePolicy(QtGui.QSizePolicy.Preferred, QtGui.QSizePolicy.Fixed)
 
         hbox = QtGui.QHBoxLayout(self)
-        hbox.addWidget(self.dirPathW)
+        hbox.addWidget(self.line)
 
         self.setLayout(hbox)
 
     def setText(self, str):
-        self.dirPathW.setText(str)
+        self.line.setText(str)
 
     def raiseInfo(self, str):
 
-        QtGui.QMessageBox.information(self.dirPathW, 'Warning!', str)
+        QtGui.QMessageBox.information(self.line, 'Warning!', str)
 
 
 
@@ -126,6 +125,12 @@ class CentralWidget(QtGui.QWidget):
         startstopGrid.addWidget(self.startW, 0, 0)
         startstopGrid.addWidget(self.endW, 0, 1)
 
+        self.vCalib = TitledText("Voltage Calibration Entry")
+        self.ints2Exclude = TitledText("Intervals to Exclude Entry")
+        calibrationExclGrid = QtGui.QGridLayout()
+        calibrationExclGrid.addWidget(self.vCalib, 0, 0)
+        calibrationExclGrid.addWidget(self.ints2Exclude, 0, 1)
+
         self.mplPlot = MatplotlibWidget(parent=self, mplPars=mplPars)
         prevButton = QtGui.QPushButton(QtGui.QIcon(os.path.join(iconsFolder, 'go-previous.png')), 'Previous', self)
         nextButton = QtGui.QPushButton(QtGui.QIcon(os.path.join(iconsFolder, 'go-next.png')), 'Next', self)
@@ -137,20 +142,32 @@ class CentralWidget(QtGui.QWidget):
         plotGrid.addWidget(self.mplPlot, 0, 1)
         plotGrid.addWidget(nextButton, 0, 2)
 
-
         vbox = QtGui.QVBoxLayout()
         vbox.stretch(1)
         vbox.addLayout(fileSelectGrid)
         vbox.addLayout(startstopGrid)
+        vbox.addLayout(calibrationExclGrid)
         vbox.addLayout(plotGrid)
 
         self.setLayout(vbox)
 
     def load(self):
 
+        vCalibStr = str(self.vCalib.line.text())
+        if vCalibStr == '':
+            vCalibStr = "20"
+
+        ints2Excl = str(self.ints2Exclude.line.text())
+        if ints2Excl == '':
+            ints2Excl = None
         self.rdi = RawDataViewer(str(self.smrFileSelect.dirPathW.text()),
-                                   forceUnits=True)
-        tStart = self.rdi.vibrationSignal.t_start
+                                 forceUnits=True,
+                                 voltageCalibStr=vCalibStr,
+                                 ints2Exclude=ints2Excl
+                                 )
+        tStart = max(self.rdi.vibrationSignal.t_start, self.rdi.voltageSignal.t_start)
+        if self.rdi.currentSignal is not None:
+            tStart = max(tStart, self.rdi.currentSignal.t_start)
         tStart.units = qu.s
 
         self.presentPlotStart = tStart
@@ -165,8 +182,8 @@ class CentralWidget(QtGui.QWidget):
 
         else:
 
-            startText = self.startW.dirPathW.text()
-            endText = self.endW.dirPathW.text()
+            startText = self.startW.line.text()
+            endText = self.endW.line.text()
 
             if not startText:
                 self.startW.raiseInfo('Please enter a valid starting time.')
