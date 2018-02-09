@@ -8,8 +8,8 @@ import quantities as qu
 mplPars = {
            'axes.labelsize': 'large',
            'axes.titlesize': 16,
-           'font.family': 'sans-serif',
-           'font.sans-serif': 'computer modern roman',
+           # 'font.family': 'sans-serif', 
+           # 'font.sans-serif': 'computer modern roman',
            'font.size': 16,
            'font.weight': 'black',
            'xtick.labelsize': 14,
@@ -165,9 +165,9 @@ class CentralWidget(QtGui.QWidget):
                                  voltageCalibStr=vCalibStr,
                                  ints2Exclude=ints2Excl
                                  )
-        tStart = max(self.rdi.vibrationSignal.t_start, self.rdi.voltageSignal.t_start)
+        tStart = min(self.rdi.vibrationSignal.t_start, self.rdi.voltageSignal.t_start)
         if self.rdi.currentSignal is not None:
-            tStart = max(tStart, self.rdi.currentSignal.t_start)
+            tStart = min(tStart, self.rdi.currentSignal.t_start)
         tStart.units = qu.s
 
         self.presentPlotStart = tStart
@@ -216,13 +216,13 @@ class CentralWidget(QtGui.QWidget):
 
     def plotNextInterval(self):
 
-        if self.presentPlotStart + 2 * self.epochWidth < self.rdi.vibrationSignal.t_stop:
+        if self.presentPlotStart + 2 * self.epochWidth <= self.rdi.voltageSignal.t_stop:
 
             self.draw(self.presentPlotStart + self.epochWidth, self.presentPlotStart + 2 * self.epochWidth)
 
     def plotPrevInterval(self):
 
-        if self.presentPlotStart - self.epochWidth > self.rdi.vibrationSignal.t_start:
+        if self.presentPlotStart - self.epochWidth >= self.rdi.voltageSignal.t_start:
 
             self.draw(self.presentPlotStart - self.epochWidth, self.presentPlotStart)
 

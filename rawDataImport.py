@@ -269,17 +269,35 @@ class RawDataViewer(object):
 
         marker = '*' if points else 'None'
 
-        epochVoltSignal = sliceAnalogSignal(self.voltageSignal, epochTimes[0], epochTimes[1])
-        ax.plot(epochVoltSignal.times, epochVoltSignal, ls='-', color='b', marker=marker,
-                label='Membrane potential (mV)')
-        epochVibSignal = sliceAnalogSignal(self.vibrationSignal, epochTimes[0], epochTimes[1])
-        ax.plot(epochVibSignal.times, epochVibSignal, ls='-', color='r', marker=marker,
-                label='Vibration Input to Antenna (um)')
+        ylims = [-50, 20]
+        if not (self.voltageSignal.t_start >= epochTimes[1] or self.voltageSignal.t_stop <= epochTimes[0]):
+            modifiedEpochStart = max(self.voltageSignal.t_start, epochTimes[0])
+            modifiedEpochEnd = min(self.voltageSignal.t_stop, epochTimes[1])
+
+            epochVoltSignal = sliceAnalogSignal(self.voltageSignal, modifiedEpochStart, modifiedEpochEnd)
+            ax.plot(epochVoltSignal.times, epochVoltSignal, ls='-', color='b', marker=marker,
+                    label='Membrane potential (mV)')
+            ylims[0] = min(ylims[0], epochVoltSignal.min().magnitude)
+            ylims[1] = max(ylims[1], epochVoltSignal.max().magnitude)
+
+        if not (self.vibrationSignal.t_start >= epochTimes[1] or self.vibrationSignal.t_stop <= epochTimes[0]):
+            modifiedEpochStart = max(self.vibrationSignal.t_start, epochTimes[0])
+            modifiedEpochEnd = min(self.vibrationSignal.t_stop, epochTimes[1])
+            epochVibSignal = sliceAnalogSignal(self.vibrationSignal, modifiedEpochStart, modifiedEpochEnd)
+            ax.plot(epochVibSignal.times, epochVibSignal, ls='-', color='r', marker=marker,
+                    label='Vibration Input to Antenna (um)')
+            ylims[0] = min(ylims[0], epochVibSignal.min().magnitude)
+            ylims[1] = max(ylims[1], epochVibSignal.max().magnitude)
 
         if self.currentSignal is not None:
-            epochCurSignal = sliceAnalogSignal(self.currentSignal, epochTimes[0], epochTimes[1])
-            ax.plot(epochCurSignal.times, epochCurSignal, ls='-', color='g', marker=marker,
-                    label='Current input through electrode (nA)')
+            if not (self.currentSignal.t_start >= epochTimes[1] or self.currentSignal.t_stop <= epochTimes[0]):
+                modifiedEpochStart = max(self.currentSignal.t_start, epochTimes[0])
+                modifiedEpochEnd = min(self.currentSignal.t_stop, epochTimes[1])
+                epochCurSignal = sliceAnalogSignal(self.currentSignal, modifiedEpochStart, modifiedEpochEnd)
+                ax.plot(epochCurSignal.times, epochCurSignal, ls='-', color='g', marker=marker,
+                        label='Current input through electrode (nA)')
+                ylims[0] = min(ylims[0], epochCurSignal.min().magnitude)
+                ylims[1] = max(ylims[1], epochCurSignal.max().magnitude)
 
         if signal is not None:
 
@@ -288,9 +306,8 @@ class RawDataViewer(object):
                     label='External Signal')
 
         ax.legend(ncol=2, loc='best')
-        ax.set_xlabel('Time ({})'.format(epochVoltSignal.times.units.dimensionality.string))
-        ax.set_ylim(min(epochVibSignal.magnitude.min(), epochVoltSignal.magnitude.min()),
-                    max(epochVibSignal.magnitude.max(), epochVoltSignal.magnitude.max()))
+        ax.set_xlabel('Time ({})'.format(self.voltageSignal.times.units.dimensionality.string))
+        ax.set_ylim(*ylims)
 
     # ******************************************************************************************************************
 # **********************************************************************************************************************
