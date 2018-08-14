@@ -1,6 +1,8 @@
 # GJEMSRDViewer
 pyQT4 based gui application for viewing electrophysiological traces of Ginjang Project
 
+![Screenshot of application](etc/exampleScreenshot.png "Example Screenshot")
+
 ## Installation
 Create a virtual environment with conda/pyenv/pipenv and install the packages in "setup.py" within it.
 Activate the environment and you are good to go!
